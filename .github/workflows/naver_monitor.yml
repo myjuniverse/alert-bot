@@ -1,0 +1,44 @@
+name: Naver Booking Monitor
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # 10분마다 실행
+  workflow_dispatch:           # GitHub Actions 탭에서 수동 실행 가능
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      - name: Install Python packages
+        run: pip install selenium webdriver-manager requests
+
+      - name: Run monitor (1회 실행)
+        env:
+          CI: "true"
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python naver_booking_bot.py
+
+      - name: Upload screenshot (디버그용)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-${{ github.run_number }}
+          path: naver_booking_screenshot.png
+          if-no-files-found: ignore
+          retention-days: 1
