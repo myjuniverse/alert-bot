@@ -71,68 +71,60 @@ def check_naver_booking(url, target_date):
             pass
         time.sleep(3)
 
-        # 디버그용 스크린샷 (첫 실행 시 확인용)
+        # 페이지 끝까지 스크롤해서 달력 렌더링 유도
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(2)
+        driver.execute_script("window.scrollTo(0, 0);")
+        time.sleep(1)
+
+        # 전체 페이지 스크린샷 (스크롤 포함)
         screenshot_path = "naver_booking_screenshot.png"
+        original_size = driver.get_window_size()
+        page_height = driver.execute_script("return document.body.scrollHeight")
+        driver.set_window_size(1280, max(page_height, 800))
+        time.sleep(1)
         driver.save_screenshot(screenshot_path)
-        print(f"  스크린샷 저장: {screenshot_path}")
+        driver.set_window_size(original_size['width'], original_size['height'])
+        print(f"  스크린샷 저장 (전체 페이지, 높이={page_height}px): {screenshot_path}")
 
-        # 날짜에서 월, 일 추출
-        # target_date = "2026-07-10" → month="7", day="10"
-        parts = target_date.split("-")
-        day_num = str(int(parts[2]))  # "10" (앞 0 제거)
+        # target_date = "2026-07-10" → day_num = "10"
+        day_num = str(int(target_date.split("-")[2]))
 
-        # 달력 날짜 셀렉터 후보 (네이버 예약 UI에 맞게 순서대로 시도)
-        selectors = [
-            f"[data-date='{target_date}']",
-            f"[data-day='{target_date}']",
-            f"button[aria-label*='{day_num}일']",
-            f"td[aria-label*='{day_num}일']",
-            f"[data-value='{target_date}']",
-        ]
+        # 네이버 예약 달력 구조:
+        #   예약 가능 → <button class="calendar_date">
+        #   마감      → <button class="calendar_date closed">
+        #   휴무/비영업 → <button class="calendar_date unselectable" disabled>
+        # span.num 안의 텍스트로 날짜 식별
 
-        target_el = None
-        for sel in selectors:
-            elements = driver.find_elements(By.CSS_SELECTOR, sel)
-            if elements:
-                target_el = elements[0]
-                print(f"  셀렉터 '{sel}' 으로 날짜 요소 발견")
-                break
+        date_buttons = driver.find_elements(By.CSS_SELECTOR, "button.calendar_date")
+        print(f"  달력 버튼 {len(date_buttons)}개 발견")
 
-        # 셀렉터 전부 실패 시 텍스트로 탐색
-        if target_el is None:
-            print(f"  CSS 셀렉터 실패 → 버튼 텍스트로 탐색 ('{day_num}')")
-            all_buttons = driver.find_elements(By.TAG_NAME, "button")
-            for btn in all_buttons:
-                if btn.text.strip() == day_num:
-                    target_el = btn
-                    print(f"  텍스트 '{day_num}'으로 버튼 발견")
-                    break
-
-        if target_el is None:
-            print(f"  ⚠️ '{target_date}' 날짜 요소를 찾지 못했습니다.")
-            print("  → naver_booking_screenshot.png 를 열어 달력 구조를 확인하세요.")
+        if not date_buttons:
+            print("  ⚠️ 달력 버튼을 찾지 못했습니다. 스크린샷을 확인하세요.")
             return None
 
-        # 활성화 여부 확인
-        is_disabled  = target_el.get_attribute("disabled")
-        aria_disabled = target_el.get_attribute("aria-disabled")
-        class_attr   = (target_el.get_attribute("class") or "").lower()
+        target_el = None
+        for btn in date_buttons:
+            try:
+                num_span = btn.find_element(By.CSS_SELECTOR, "span.num")
+                if num_span.text.strip() == day_num:
+                    target_el = btn
+                    break
+            except Exception:
+                continue
 
-        unavail_keywords = {"disabled", "closed", "soldout", "past",
-                            "unavailable", "unable", "block", "inactive"}
-        has_unavail_class = any(k in class_attr for k in unavail_keywords)
+        if target_el is None:
+            print(f"  ⚠️ 달력에서 {day_num}일을 찾지 못했습니다.")
+            return None
 
-        print(f"  날짜 {target_date} → disabled={is_disabled}, "
-              f"aria-disabled={aria_disabled}, class={class_attr[:80]}")
+        class_attr  = target_el.get_attribute("class") or ""
+        is_disabled = target_el.get_attribute("disabled") is not None
+        print(f"  {day_num}일 class='{class_attr}', disabled={is_disabled}")
 
-        if is_disabled == "true" or is_disabled is True:
+        # closed(마감) 또는 unselectable(휴무) 이면 예약 불가
+        if "closed" in class_attr or "unselectable" in class_attr or is_disabled:
             return False
-        if aria_disabled == "true":
-            return False
-        if has_unavail_class:
-            return False
 
-        # disabled 없고 비활성 클래스도 없으면 예약 가능
         return True
 
     except Exception as e:
