@@ -12,22 +12,30 @@ import sys
 import os
 
 # === 텔레그램 설정 ===
-# 로컬 실행 시: 아래 값을 직접 입력하거나 환경변수로 설정
-# GitHub Actions 실행 시: Secrets에서 자동으로 주입됨
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "7751593135:AAFcb-bjt6SgLJgLFoas65Vhs7NaR67BEHY")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID",   "7950312215")
 # ===================
 
+# === 모니터링 대상 ===
+# time_after: "17:00" 이면 17시 이후 슬롯만 체크, None 이면 시간 무관
+TARGETS = [
+    {"date": "2026-07-05", "time_after": "17:00", "label": "7/5(일) 17시 이후"},
+    {"date": "2026-07-10", "time_after": None,    "label": "7/10(금) 전체"},
+    {"date": "2026-07-12", "time_after": "17:00", "label": "7/12(일) 17시 이후"},
+]
+BASE_URL = "https://booking.naver.com/booking/13/bizes/222456/items/3048840?startDate=2026-07-05"
+CHECK_INTERVAL = 60  # 로컬 루프 실행 시 간격 (초)
+# ====================
+
+
 def send_telegram(message):
-    """텔레그램 메시지 전송"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        data = {
+        response = requests.post(url, data={
             "chat_id": TELEGRAM_CHAT_ID,
             "text": message,
             "parse_mode": "HTML"
-        }
-        response = requests.post(url, data=data)
+        })
         if response.status_code == 200:
             print("  ✅ 텔레그램 알림 전송")
         else:
@@ -36,18 +44,70 @@ def send_telegram(message):
         print(f"  텔레그램 오류: {e}")
 
 
-def check_naver_booking(url, target_date):
+def to_minutes(time_str, is_pm):
+    """'5:00' + is_pm=True → 17*60+0 = 1020 (분 단위 24시간)"""
+    h, m = map(int, time_str.split(":"))
+    if is_pm and h != 12:
+        h += 12
+    elif not is_pm and h == 12:
+        h = 0
+    return h * 60 + m
+
+
+def check_time_slots(driver, time_after):
     """
-    네이버 예약 페이지에서 특정 날짜 활성화 여부 확인.
-    target_date: "2026-07-10" 형식
-    반환: True(예약 가능) / False(불가) / None(오류)
+    현재 선택된 날짜의 시간 슬롯 확인.
+    time_after: "17:00" 이면 17시 이후만, None 이면 아무 시간이나 가능하면 True
+    """
+    limit = None
+    if time_after:
+        h, m = map(int, time_after.split(":"))
+        limit = h * 60 + m
+
+    try:
+        slot_div = driver.find_element(By.CSS_SELECTOR, ".calendar_time_slot")
+    except Exception:
+        print("    시간 슬롯 영역 없음")
+        return False
+
+    # time_title(오전/오후)과 time_list를 순서대로 처리
+    children = slot_div.find_elements(By.XPATH, "./*")
+    is_pm = False
+    available = []
+
+    for child in children:
+        cls = child.get_attribute("class") or ""
+        if "time_title" in cls:
+            is_pm = "오후" in child.text
+        elif "time_list" in cls:
+            for btn in child.find_elements(By.CSS_SELECTOR, "button.btn_time"):
+                if btn.get_attribute("disabled") or "unselectable" in (btn.get_attribute("class") or ""):
+                    continue
+                t_str = btn.text.strip()
+                t_min = to_minutes(t_str, is_pm)
+                if limit is None or t_min >= limit:
+                    h24, m24 = divmod(t_min, 60)
+                    available.append(f"{h24:02d}:{m24:02d}")
+
+    if available:
+        print(f"    예약 가능 시간: {', '.join(available)}")
+        return True
+
+    print(f"    조건에 맞는 예약 가능 시간 없음")
+    return False
+
+
+def check_all_targets():
+    """
+    모든 대상 날짜/시간 확인.
+    반환: 예약 가능한 target dict 리스트
     """
     options = webdriver.ChromeOptions()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1280,800')
+    options.add_argument('--window-size=1280,900')
     options.add_argument(
         'user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
@@ -57,88 +117,82 @@ def check_naver_booking(url, target_date):
         service=Service(ChromeDriverManager().install()),
         options=options
     )
+    found = []
 
     try:
-        print(f"  페이지 로드 중: {url}")
-        driver.get(url)
+        print(f"  페이지 로드 중...")
+        driver.get(BASE_URL)
 
-        # 달력 로딩 대기 (최대 15초)
         try:
             WebDriverWait(driver, 15).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "button, td, [role='gridcell']"))
+                EC.presence_of_element_located((By.CSS_SELECTOR, "button.calendar_date"))
             )
         except Exception:
             pass
         time.sleep(3)
 
-        # 페이지 끝까지 스크롤해서 달력 렌더링 유도
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(2)
-        driver.execute_script("window.scrollTo(0, 0);")
-        time.sleep(1)
-
-        # 전체 페이지 스크린샷 (스크롤 포함)
-        screenshot_path = "naver_booking_screenshot.png"
-        original_size = driver.get_window_size()
+        # 전체 페이지 스크린샷
         page_height = driver.execute_script("return document.body.scrollHeight")
-        driver.set_window_size(1280, max(page_height, 800))
+        driver.set_window_size(1280, max(page_height, 900))
         time.sleep(1)
-        driver.save_screenshot(screenshot_path)
-        driver.set_window_size(original_size['width'], original_size['height'])
-        print(f"  스크린샷 저장 (전체 페이지, 높이={page_height}px): {screenshot_path}")
+        driver.save_screenshot("naver_booking_screenshot.png")
 
-        # target_date = "2026-07-10" → day_num = "10"
-        day_num = str(int(target_date.split("-")[2]))
+        for target in TARGETS:
+            date      = target["date"]
+            time_after = target["time_after"]
+            label     = target["label"]
+            day_num   = str(int(date.split("-")[2]))
 
-        # 네이버 예약 달력 구조:
-        #   예약 가능 → <button class="calendar_date">
-        #   마감      → <button class="calendar_date closed">
-        #   휴무/비영업 → <button class="calendar_date unselectable" disabled>
-        # span.num 안의 텍스트로 날짜 식별
+            print(f"\n  [{label}] 확인 중...")
 
-        date_buttons = driver.find_elements(By.CSS_SELECTOR, "button.calendar_date")
-        print(f"  달력 버튼 {len(date_buttons)}개 발견")
+            # 날짜 버튼 찾기 (span.num 텍스트로 식별)
+            date_buttons = driver.find_elements(By.CSS_SELECTOR, "button.calendar_date")
+            target_btn = None
+            for btn in date_buttons:
+                try:
+                    if btn.find_element(By.CSS_SELECTOR, "span.num").text.strip() == day_num:
+                        target_btn = btn
+                        break
+                except Exception:
+                    continue
 
-        if not date_buttons:
-            print("  ⚠️ 달력 버튼을 찾지 못했습니다. 스크린샷을 확인하세요.")
-            return None
-
-        target_el = None
-        for btn in date_buttons:
-            try:
-                num_span = btn.find_element(By.CSS_SELECTOR, "span.num")
-                if num_span.text.strip() == day_num:
-                    target_el = btn
-                    break
-            except Exception:
+            if target_btn is None:
+                print(f"    {day_num}일 버튼을 찾지 못함")
                 continue
 
-        if target_el is None:
-            print(f"  ⚠️ 달력에서 {day_num}일을 찾지 못했습니다.")
-            return None
+            cls        = target_btn.get_attribute("class") or ""
+            is_disabled = target_btn.get_attribute("disabled") is not None
+            print(f"    class='{cls}'")
 
-        class_attr  = target_el.get_attribute("class") or ""
-        is_disabled = target_el.get_attribute("disabled") is not None
-        print(f"  {day_num}일 class='{class_attr}', disabled={is_disabled}")
+            if "closed" in cls or "unselectable" in cls or is_disabled:
+                print(f"    ❌ 예약 불가 (마감 또는 휴무)")
+                continue
 
-        # closed(마감) 또는 unselectable(휴무) 이면 예약 불가
-        if "closed" in class_attr or "unselectable" in class_attr or is_disabled:
-            return False
+            # 날짜 활성 → 클릭해서 시간 슬롯 로드
+            print(f"    날짜 활성화됨 → 시간 슬롯 확인")
+            driver.execute_script("arguments[0].click();", target_btn)
+            time.sleep(2)
 
-        return True
+            if time_after is None:
+                print(f"    ✅ 예약 가능! (시간 무관)")
+                found.append(target)
+            elif check_time_slots(driver, time_after):
+                print(f"    ✅ {time_after} 이후 예약 가능!")
+                found.append(target)
+            else:
+                print(f"    ❌ {time_after} 이후 예약 가능 시간 없음")
 
     except Exception as e:
         print(f"  오류: {e}")
-        return None
-
     finally:
         driver.quit()
+
+    return found
 
 
 def signal_handler(sig, frame):
     print('\n\n' + '='*60)
     print('프로그램을 수동으로 종료합니다.')
-    print('='*60)
     send_telegram("네이버 예약 모니터링을 수동으로 종료했습니다.")
     sys.exit(0)
 
@@ -148,46 +202,40 @@ def run_once():
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"[{current_time}] 확인 중...")
 
-    result = check_naver_booking(URL, TARGET_DATE)
+    found = check_all_targets()
 
-    if result is True:
-        message = (
+    if found:
+        labels = "\n".join([f"  • {t['label']}" for t in found])
+        send_telegram(
             f"<b>네이버 예약 가능!</b>\n\n"
-            f"상품: {PRODUCT_NAME}\n"
-            f"날짜: {TARGET_DATE}\n"
-            f"발견 시간: {current_time}\n\n"
-            f'<a href="{URL}">지금 바로 예약하기</a>'
+            f"{labels}\n\n"
+            f"⏰ {current_time}\n"
+            f'<a href="{BASE_URL}">지금 바로 예약하기</a>'
         )
-        send_telegram(message)
         print("✅ 예약 가능 → 텔레그램 알림 전송")
-    elif result is False:
-        print(f"❌ 아직 예약 불가 ({TARGET_DATE})")
     else:
-        print("⚠️ 확인 실패 (스크린샷 확인 필요)")
+        print("❌ 조건에 맞는 예약 가능 슬롯 없음")
 
 
 def run_loop():
     """무한 루프로 반복 확인 (로컬 실행용)"""
     signal.signal(signal.SIGINT, signal_handler)
-
     start_time = datetime.now()
-    interval_text = f"{CHECK_INTERVAL}초 ({CHECK_INTERVAL//60}분)마다" if CHECK_INTERVAL >= 60 else f"{CHECK_INTERVAL}초마다"
+    labels_str = ", ".join([t["label"] for t in TARGETS])
 
-    send_telegram(f"""네이버 예약 모니터링 시작!
-
-상품: {PRODUCT_NAME}
-날짜: {TARGET_DATE}
-확인 주기: {interval_text}
-
-예약 가능해지면 바로 알려드립니다.""")
+    send_telegram(
+        f"네이버 예약 모니터링 시작!\n\n"
+        f"대상: {labels_str}\n"
+        f"확인 주기: {CHECK_INTERVAL}초\n\n"
+        f"예약 가능해지면 바로 알려드립니다."
+    )
 
     print("="*60)
-    print(f"상품: {PRODUCT_NAME}  |  날짜: {TARGET_DATE}  |  주기: {interval_text}")
-    print("종료: Ctrl+C")
+    print(f"모니터링 대상: {labels_str}")
+    print(f"확인 주기: {CHECK_INTERVAL}초  |  종료: Ctrl+C")
     print("="*60)
 
     check_count = 0
-    error_count = 0
 
     while True:
         check_count += 1
@@ -195,39 +243,26 @@ def run_loop():
         print(f"\n[확인 #{check_count}] {current_time}")
 
         try:
-            result = check_naver_booking(URL, TARGET_DATE)
+            found = check_all_targets()
 
-            if result is None:
-                error_count += 1
-                print(f"  ⚠️ 확인 실패 (누적 {error_count}회)")
-                if error_count >= 5:
-                    send_telegram("⚠️ 네이버 예약 봇 오류 5회 연속\nnaver_booking_screenshot.png 확인 필요")
-                    error_count = 0
-
-            elif result:
+            if found:
                 elapsed = int((datetime.now() - start_time).total_seconds() / 60)
-                message = (
+                labels_found = "\n".join([f"  • {t['label']}" for t in found])
+                send_telegram(
                     f"<b>네이버 예약 가능!</b>\n\n"
-                    f"상품: {PRODUCT_NAME}\n"
-                    f"날짜: {TARGET_DATE}\n"
-                    f"발견 시간: {current_time}\n"
-                    f"확인 횟수: {check_count}회 / {elapsed}분 소요\n\n"
-                    f'<a href="{URL}">지금 바로 예약하기</a>'
+                    f"{labels_found}\n\n"
+                    f"⏰ {current_time} / {check_count}회 / {elapsed}분 소요\n"
+                    f'<a href="{BASE_URL}">지금 바로 예약하기</a>'
                 )
-                send_telegram(message)
                 try:
                     for _ in range(5):
                         os.system('afplay /System/Library/Sounds/Glass.aiff')
                         time.sleep(0.5)
-                    os.system(f'say "네이버 예약 {TARGET_DATE} 가능합니다"')
+                    os.system('say "네이버 예약 가능합니다"')
                 except Exception:
                     pass
-                print(f"\n✅ 예약 가능! 프로그램 종료")
+                print("✅ 예약 가능! 프로그램 종료")
                 break
-
-            else:
-                error_count = 0
-                print(f"  ❌ 아직 예약 불가")
 
         except Exception as e:
             print(f"  ⚠️ 예외: {e}")
@@ -236,22 +271,13 @@ def run_loop():
 
         if check_count % 30 == 0:
             elapsed = int((datetime.now() - start_time).total_seconds() / 60)
-            send_telegram(f"모니터링 중...\n\n확인: {check_count}회\n경과: {elapsed}분\n상태: 아직 예약 불가")
+            send_telegram(f"모니터링 중...\n\n확인: {check_count}회\n경과: {elapsed}분\n상태: 아직 없음")
 
         print(f"  다음 확인: {CHECK_INTERVAL}초 후")
         time.sleep(CHECK_INTERVAL)
 
 
 if __name__ == "__main__":
-
-    # === 설정 ===
-    URL          = "https://booking.naver.com/booking/13/bizes/222456/items/3048840?startDate=2026-07-10"
-    PRODUCT_NAME = "네이버 예약"
-    TARGET_DATE  = "2026-07-10"
-    CHECK_INTERVAL = 60  # 로컬 루프 실행 시 간격 (초)
-    # ============
-
-    # GitHub Actions 환경(CI=true)이면 1회 실행, 아니면 로컬 루프
     if os.environ.get("CI"):
         run_once()
     else:
