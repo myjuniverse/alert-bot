@@ -4,6 +4,7 @@ on:
   push:                        # push 할 때마다 자동 실행
   schedule:
     - cron: '*/5 * * * *'    # 5분마다 실행
+    - cron: '0 23 * * *'    # 매일 한국시간 오전 8시 상태 알림
   workflow_dispatch:           # GitHub Actions 탭에서 수동 실행 가능
 
 jobs:
@@ -28,9 +29,10 @@ jobs:
       - name: Install Python packages
         run: pip install selenium webdriver-manager requests
 
-      - name: Run monitor (1회 실행)
+      - name: Run monitor
         env:
           CI: "true"
+          STATUS_REPORT: ${{ github.event.schedule == '0 23 * * *' && 'true' || 'false' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python naver_booking_bot.py

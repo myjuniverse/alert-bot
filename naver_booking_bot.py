@@ -197,7 +197,7 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 
-def run_once():
+def run_once(status_report=False):
     """한 번만 확인하고 종료 (GitHub Actions용)"""
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"[{current_time}] 확인 중...")
@@ -215,6 +215,14 @@ def run_once():
         print("✅ 예약 가능 → 텔레그램 알림 전송")
     else:
         print("❌ 조건에 맞는 예약 가능 슬롯 없음")
+        if status_report:
+            labels = "\n".join([f"  • {t['label']}" for t in TARGETS])
+            send_telegram(
+                f"✅ 모니터링 정상 작동 중\n\n"
+                f"대상:\n{labels}\n\n"
+                f"⏰ {current_time}"
+            )
+            print("📢 상태 알림 전송")
 
 
 def run_loop():
@@ -279,6 +287,7 @@ def run_loop():
 
 if __name__ == "__main__":
     if os.environ.get("CI"):
-        run_once()
+        status_report = os.environ.get("STATUS_REPORT") == "true"
+        run_once(status_report=status_report)
     else:
         run_loop()
