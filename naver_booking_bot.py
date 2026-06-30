@@ -19,7 +19,8 @@ TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID",   "7950312215")
 # === 모니터링 대상 ===
 # time_after: "17:00" 이면 17시 이후 슬롯만 체크, None 이면 시간 무관
 TARGETS = [
-    {"date": "2026-07-05", "time_after": "17:00", "label": "7/5(일) 17시 이후"},
+    {"date": "2026-07-04", "time_after": "18:00", "label": "7/4(토) 18시 이후"},
+    {"date": "2026-07-05", "time_after": None,    "label": "7/5(일) 전체"},
     {"date": "2026-07-10", "time_after": None,    "label": "7/10(금) 전체"},
     {"date": "2026-07-12", "time_after": "17:00", "label": "7/12(일) 17시 이후"},
 ]
