@@ -12,8 +12,8 @@ import sys
 import os
 
 # === 텔레그램 설정 ===
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "7751593135:AAFcb-bjt6SgLJgLFoas65Vhs7NaR67BEHY")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID",   "7950312215")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID",   "")
 # ===================
 
 # === 모니터링 대상 ===
