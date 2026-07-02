@@ -288,6 +288,7 @@ def run_loop():
 
 if __name__ == "__main__":
     if os.environ.get("CI"):
-        run_once(status_report=True)  # 테스트용 - 항상 상태 알림 전송
+        status_report = os.environ.get("STATUS_REPORT") == "true"
+        run_once(status_report=status_report)
     else:
         run_loop()
