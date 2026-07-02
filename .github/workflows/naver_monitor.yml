@@ -5,7 +5,12 @@ on:
   schedule:
     - cron: '*/5 * * * *'    # 5분마다 실행
     - cron: '0 22 * * *'    # 매일 한국시간 오전 7시 (지연 감안해 8시 목표)
-  workflow_dispatch:           # GitHub Actions 탭에서 수동 실행 가능
+  workflow_dispatch:
+    inputs:
+      status_report:
+        description: '상태 알림 전송'
+        type: boolean
+        default: false
 
 jobs:
   check:
@@ -32,7 +37,7 @@ jobs:
       - name: Run monitor
         env:
           CI: "true"
-          STATUS_REPORT: ${{ github.event.schedule == '0 23 * * *' && 'true' || 'false' }}
+          STATUS_REPORT: ${{ (github.event.schedule == '0 22 * * *' || github.event.inputs.status_report == 'true') && 'true' || 'false' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python naver_booking_bot.py
