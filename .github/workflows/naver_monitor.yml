@@ -1,7 +1,13 @@
 name: 네이버 예약 모니터
 
 on:
+  push:
+  schedule:
+    - cron: '*/5 * * * *'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   check:
@@ -31,6 +37,14 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python naver_booking_bot.py
+
+      - name: Save state
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git diff --staged --quiet || git commit -m "chore: update state" && git push
 
       - name: Upload screenshot (디버그용)
         if: always()

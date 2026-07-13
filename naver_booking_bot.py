@@ -5,11 +5,15 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+import json
 import requests
 import signal
 import sys
 import os
+
+KST = timezone(timedelta(hours=9))
+STATE_FILE = "state.json"
 
 # === 텔레그램 설정 ===
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -19,14 +23,27 @@ TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID",   "")
 # === 모니터링 대상 ===
 # time_after: "17:00" 이면 17시 이후 슬롯만 체크, None 이면 시간 무관
 TARGETS = [
-    {"date": "2026-07-04", "time_after": "18:00", "label": "7/4(토) 18시 이후"},
-    {"date": "2026-07-05", "time_after": None,    "label": "7/5(일) 전체"},
-    {"date": "2026-07-10", "time_after": None,    "label": "7/10(금) 전체"},
-    {"date": "2026-07-12", "time_after": "17:00", "label": "7/12(일) 17시 이후"},
+    {"date": "2026-08-01", "time_after": None, "label": "8/1(토) 테스트"},
 ]
-BASE_URL = "https://booking.naver.com/booking/13/bizes/222456/items/3048840?startDate=2026-07-05"
+BASE_URL = "https://booking.naver.com/booking/13/bizes/222456/items/3048840?startDate=2026-08-01"
 CHECK_INTERVAL = 60  # 로컬 루프 실행 시 간격 (초)
 # ====================
+
+
+def load_state():
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"last_check_kst": None, "available_labels": []}
+
+
+def save_state(check_time_kst, available_labels):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump({
+            "last_check_kst": check_time_kst,
+            "available_labels": available_labels
+        }, f, ensure_ascii=False, indent=2)
 
 
 def send_telegram(message):
@@ -92,10 +109,8 @@ def check_time_slots(driver, time_after):
 
     if available:
         print(f"    예약 가능 시간: {', '.join(available)}")
-        return True
 
-    print(f"    조건에 맞는 예약 가능 시간 없음")
-    return False
+    return available  # 빈 리스트면 False처럼 동작
 
 
 def check_all_targets():
@@ -174,14 +189,12 @@ def check_all_targets():
             driver.execute_script("arguments[0].click();", target_btn)
             time.sleep(2)
 
-            if time_after is None:
-                print(f"    ✅ 예약 가능! (시간 무관)")
-                found.append(target)
-            elif check_time_slots(driver, time_after):
-                print(f"    ✅ {time_after} 이후 예약 가능!")
-                found.append(target)
+            slots = check_time_slots(driver, time_after)
+            if slots:
+                print(f"    ✅ 예약 가능 슬롯: {', '.join(slots)}")
+                found.append({**target, "slots": slots})
             else:
-                print(f"    ❌ {time_after} 이후 예약 가능 시간 없음")
+                print(f"    ❌ 조건에 맞는 예약 가능 시간 없음")
 
     except Exception as e:
         print(f"  오류: {e}")
@@ -200,17 +213,31 @@ def signal_handler(sig, frame):
 
 def run_once(status_report=False):
     """한 번만 확인하고 종료 (GitHub Actions용)"""
-    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    print(f"[{current_time}] 확인 중...")
+    current_time = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{current_time} KST] 확인 중...")
+
+    # 이전 상태 로드
+    prev = load_state()
+    prev_time = prev.get("last_check_kst")
+    prev_available = set(prev.get("available_labels", []))
 
     found = check_all_targets()
+    current_available = set(t["label"] for t in found)
+
+    # 상태 저장
+    save_state(current_time, list(current_available))
 
     if found:
-        labels = "\n".join([f"  • {t['label']}" for t in found])
+        lines = []
+        for t in found:
+            slots_str = ", ".join(t.get("slots", []))
+            lines.append(f"  • {t['label']}: {slots_str}")
+        labels = "\n".join(lines)
+
         send_telegram(
             f"<b>네이버 예약 가능!</b>\n\n"
             f"{labels}\n\n"
-            f"⏰ {current_time}\n"
+            f"⏰ {current_time} KST\n"
             f'<a href="{BASE_URL}">지금 바로 예약하기</a>'
         )
         print("✅ 예약 가능 → 텔레그램 알림 전송")
@@ -221,7 +248,7 @@ def run_once(status_report=False):
             send_telegram(
                 f"✅ 모니터링 정상 작동 중\n\n"
                 f"대상:\n{labels}\n\n"
-                f"⏰ {current_time}"
+                f"⏰ {current_time} KST"
             )
             print("📢 상태 알림 전송")
 
