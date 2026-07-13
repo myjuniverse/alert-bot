@@ -23,9 +23,13 @@ TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID",   "")
 # === 모니터링 대상 ===
 # time_after: "17:00" 이면 17시 이후 슬롯만 체크, None 이면 시간 무관
 TARGETS = [
-    {"date": "2026-08-01", "time_after": None, "label": "8/1(토) 테스트"},
+    {"date": "2026-07-17", "time_after": "10:00", "time_before": "12:00", "label": "7/17(금) 10~12시"},
+    {"date": "2026-07-19", "time_after": None,    "time_before": None,    "label": "7/19(일) 전체"},
+    {"date": "2026-07-24", "time_after": "15:00", "time_before": "17:00", "label": "7/24(금) 15~17시"},
+    {"date": "2026-07-26", "time_after": None,    "time_before": None,    "label": "7/26(일) 전체"},
+    {"date": "2026-08-01", "time_after": "10:00", "time_before": "12:00", "label": "8/1(토) 10~12시"},
 ]
-BASE_URL = "https://booking.naver.com/booking/13/bizes/222456/items/3048840?startDate=2026-08-01"
+BASE_URL = "https://booking.naver.com/booking/13/bizes/222456/items/3048840?startDate=2026-07-17"
 CHECK_INTERVAL = 60  # 로컬 루프 실행 시 간격 (초)
 # ====================
 
@@ -72,15 +76,20 @@ def to_minutes(time_str, is_pm):
     return h * 60 + m
 
 
-def check_time_slots(driver, time_after):
+def check_time_slots(driver, time_after, time_before=None):
     """
     현재 선택된 날짜의 시간 슬롯 확인.
-    time_after: "17:00" 이면 17시 이후만, None 이면 아무 시간이나 가능하면 True
+    time_after: "10:00" 이면 10시 이후, None 이면 제한 없음
+    time_before: "12:00" 이면 12시 미만, None 이면 제한 없음
     """
-    limit = None
+    limit_after = None
+    limit_before = None
     if time_after:
         h, m = map(int, time_after.split(":"))
-        limit = h * 60 + m
+        limit_after = h * 60 + m
+    if time_before:
+        h, m = map(int, time_before.split(":"))
+        limit_before = h * 60 + m
 
     try:
         slot_div = driver.find_element(By.CSS_SELECTOR, ".calendar_time_slot")
@@ -103,9 +112,12 @@ def check_time_slots(driver, time_after):
                     continue
                 t_str = btn.text.strip()
                 t_min = to_minutes(t_str, is_pm)
-                if limit is None or t_min >= limit:
-                    h24, m24 = divmod(t_min, 60)
-                    available.append(f"{h24:02d}:{m24:02d}")
+                if limit_after is not None and t_min < limit_after:
+                    continue
+                if limit_before is not None and t_min >= limit_before:
+                    continue
+                h24, m24 = divmod(t_min, 60)
+                available.append(f"{h24:02d}:{m24:02d}")
 
     if available:
         print(f"    예약 가능 시간: {', '.join(available)}")
@@ -189,7 +201,7 @@ def check_all_targets():
             driver.execute_script("arguments[0].click();", target_btn)
             time.sleep(2)
 
-            slots = check_time_slots(driver, time_after)
+            slots = check_time_slots(driver, time_after, target.get("time_before"))
             if slots:
                 print(f"    ✅ 예약 가능 슬롯: {', '.join(slots)}")
                 found.append({**target, "slots": slots})
