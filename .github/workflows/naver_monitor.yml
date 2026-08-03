@@ -1,9 +1,6 @@
 name: 네이버 예약 모니터
 
 on:
-  push:
-  schedule:
-    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 permissions:
